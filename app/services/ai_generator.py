@@ -86,6 +86,73 @@ _cancelled_gen_ids: set[int] = set()
 _gen_id_counter = 0
 
 
+# ─── AI Readiness Probe ──────────────────────────────────────────────────────
+
+class _ModelNotReadyError(Exception):
+    """Raised when no AI model is reachable / API key invalid."""
+
+
+def _probe_ai_ready() -> tuple[bool, str]:
+    """Internal alias. See probe_ai_ready."""
+    return probe_ai_ready()
+
+
+def probe_ai_ready() -> tuple[bool, str]:
+    """
+    Quickly checks that the Gemini API is reachable and the key is valid.
+    Sends the smallest possible request (1-token response) to the primary model.
+    Returns (True, "") if OK, (False, user_friendly_error_msg) if not.
+    """
+    api_key = os.getenv("ANTIGRAVITY_API_KEY", "").strip()
+    if not api_key:
+        return False, "AI service is not configured (missing API key). Contact the app administrator."
+
+    primary_model = os.getenv("ANTIGRAVITY_MODEL", "gemini-3.6-flash")
+    fallback_str  = os.getenv("ANTIGRAVITY_FALLBACK_MODELS", "gemini-3.5-flash,gemini-flash-latest,gemini-2.5-flash")
+    models = [primary_model] + [m.strip() for m in fallback_str.split(",") if m.strip() and m.strip() != primary_model]
+
+    probe_payload = {
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {"maxOutputTokens": 1}
+    }
+
+    for model in models:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={api_key}"
+        )
+        try:
+            resp = http_requests.post(url, json=probe_payload, timeout=15)
+        except Exception as e:
+            logger.warning(f"AI probe: network error for {model}: {e}")
+            continue
+
+        if resp.status_code == 200:
+            logger.info(f"AI probe: {model} is ready ✓")
+            return True, ""
+
+        if resp.status_code == 429:
+            logger.warning(f"AI probe: {model} rate-limited (quota exceeded)")
+            # Try next model — maybe a fallback has quota
+            continue
+
+        if resp.status_code == 401 or resp.status_code == 403:
+            logger.error(f"AI probe: API key rejected by {model} ({resp.status_code})")
+            return False, "AI service rejected the API key. Check your credentials."
+
+        if resp.status_code == 404:
+            logger.warning(f"AI probe: model {model} not found (404), trying fallback")
+            continue
+
+        logger.warning(f"AI probe: unexpected status {resp.status_code} from {model}")
+        continue
+
+    return False, (
+        "AI service is currently unavailable or over quota. "
+        "Please wait a few minutes and try again."
+    )
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def generate_feature_async(uid: str, name: str, description: str, folder_path: str, app) -> None:
@@ -169,6 +236,14 @@ def _generation_worker(uid: str, gen_id: int, name: str, description: str,
     Uses the Flask app context so DB calls work inside the thread.
     """
     with app.app_context():
+        # ── Pre-flight: check AI is reachable before doing anything ──────────
+        ai_ok, ai_err = _probe_ai_ready()
+        if not ai_ok:
+            logger.error(f"Gen {gen_id} ({uid}): AI readiness check failed: {ai_err}")
+            update_feature_status(uid, STATUS_ERROR, error_msg=ai_err)
+            _cleanup(gen_id)
+            return
+
         if is_cancelled(gen_id):
             logger.info(f"Gen {gen_id} ({uid}): cancelled before start, exiting")
             _cleanup(gen_id)
@@ -422,7 +497,7 @@ def _run_generation(uid: str, gen_id: int, name: str, description: str,
             return
         except Exception as e:
             logger.error(f"Gen {gen_id} ({uid}): API call failed: {e}", exc_info=True)
-            update_feature_status(uid, STATUS_ERROR, error_msg=f"AI generation failed: {str(e)}")
+            update_feature_status(uid, STATUS_ERROR, error_msg="Generation failed. Please try again in a moment.")
             return
 
         # ── Check cancellation after API returns ──────────────────────────────
@@ -524,7 +599,7 @@ def _run_generation(uid: str, gen_id: int, name: str, description: str,
                     logger.error(f"Gen {gen_id} ({uid}): Vite build failed: {build_err}")
                     update_feature_status(
                         uid, STATUS_ERROR,
-                        error_msg=f"App compilation failed: {build_err[:250]}"
+                        error_msg="Could not build this feature. Please try describing what you want in different words."
                     )
                     return
 
@@ -543,7 +618,7 @@ def _run_generation(uid: str, gen_id: int, name: str, description: str,
     # Exhausted all rounds without completion
     update_feature_status(
         uid, STATUS_ERROR,
-        error_msg="Generation loop exhausted. Please try again with a clearer description."
+        error_msg="Could not finish creating this feature. Please try again with a simpler description."
     )
 
 

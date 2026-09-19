@@ -28,7 +28,7 @@ from app.models.feature_model import (
     STATUS_BUILDING,
     STATUS_CLARIFYING,
 )
-from app.services.ai_generator import generate_feature_async, continue_after_clarification, cancel_generation
+from app.services.ai_generator import generate_feature_async, continue_after_clarification, cancel_generation, probe_ai_ready
 from app.utils.response import success_response, error_response
 
 logger = logging.getLogger("feature_controller")
@@ -70,6 +70,12 @@ def ctrl_create_feature(user: dict, name: str, description: str):
         return error_response("Feature description is required", 400)
     if len(name.strip()) > 120:
         return error_response("Feature name must be 120 characters or fewer", 400)
+
+    # ── Pre-flight: verify AI is reachable before touching DB ────────────────
+    ai_ok, ai_err = probe_ai_ready()
+    if not ai_ok:
+        logger.warning(f"ctrl_create_feature: AI not ready for user {user.get('id')} — {ai_err}")
+        return error_response(f"Cannot start: {ai_err}", 503)
 
     owner_id = user["id"]
     folder_path = _feature_folder_path("__placeholder__")  # UID not known yet

@@ -1,0 +1,52 @@
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: featureapp-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - featureapp-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  backend:
+    build: .
+    container_name: featureapp-backend
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      - PORT=8004
+      - HOST=0.0.0.0
+      - MONGO_URI=mongodb://mongo:27017/featureapp
+      - MONGO_DB_NAME=featureapp
+    volumes:
+      - .:/app
+    networks:
+      - featureapp-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  mongo_data:
+    driver: local
+
+networks:
+  featureapp-network:
+    driver: bridge

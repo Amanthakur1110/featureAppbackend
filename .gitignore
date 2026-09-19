@@ -27,3 +27,6 @@ wheels/
 .vscode/
 *.log
 mongo_data/
+workspaces/
+features/
+node_modules/

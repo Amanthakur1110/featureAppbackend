@@ -55,6 +55,15 @@ class MongoManager:
             background=True
         )
 
+        # Features collection indexes
+        self.db.features.create_index([("uid", ASCENDING)],      unique=True, background=True)
+        self.db.features.create_index([("owner_id", ASCENDING)],               background=True)
+        self.db.features.create_index([("status", ASCENDING)],                 background=True)
+        self.db.features.create_index(
+            [("owner_id", ASCENDING), ("created_at", -1)],
+            background=True
+        )
+
     def ping(self) -> tuple[bool, str]:
         """Pings the MongoDB server to verify health."""
         if not self.client:

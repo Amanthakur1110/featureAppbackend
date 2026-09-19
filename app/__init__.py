@@ -32,7 +32,8 @@ def create_app(config_name=None):
     logger.info(f"Initializing FeatureApp Backend in [{config_name}] mode")
 
     # Enable Cross-Origin Resource Sharing (CORS)
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    # Must cover both /api/* (API) and /feature/* (static WebView served files)
+    CORS(app, resources={r"/*": {"origins": "*"}})
 
     # Initialize MongoDB connection & indexes
     init_db(app)
